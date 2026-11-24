@@ -91,7 +91,7 @@ def fetch(ref):
     resolve inside it into public/<owner>_<slug>/. Output file names come from third parties."""
     if not REF_OK.match(ref) or '..' in ref:
         raise ValueError(f'unexpected notebook ref {ref!r}')
-    tmp = tempfile.mkdtemp(prefix='nb_', dir='out')
+    tmp = tempfile.mkdtemp(prefix='santa_nb_')  # system temp dir, outside the project tree
     try:
         kaggle('kernels', 'output', ref, '-p', tmp, '--file-pattern', r'.*\.csv$', '-q', '-o', timeout=90)
         root = os.path.realpath(tmp)
