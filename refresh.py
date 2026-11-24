@@ -2,7 +2,7 @@
 usage: python refresh.py [--no-submit] [--full]     (run from the santa-2026 folder; safe to run every few minutes)
 Only notebooks re-run since the last pass are downloaded (--full re-downloads all). A lock file stops overlapping runs.
 Downloaded files are data only: merge.py re-validates every program with score.check."""
-import csv, datetime, io, json, os, re, shutil, subprocess, sys, time
+import csv, datetime, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile, time
 
 COMP, BEST = 'santa-2026', 'out/best.csv'
 LAST, SEEN, LOCK = 'out/last_submitted.txt', 'out/kernel_seen.json', 'out/refresh.lock'
@@ -83,19 +83,56 @@ def main():
         os.remove(LOCK)
 
 
+REF_OK = re.compile(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
+
+
+def fetch(ref):
+    """Download a notebook's CSV outputs into a fresh temp dir, then move only plain .csv files that
+    resolve inside it into public/<owner>_<slug>/. Output file names come from third parties."""
+    if not REF_OK.match(ref) or '..' in ref:
+        raise ValueError(f'unexpected notebook ref {ref!r}')
+    tmp = tempfile.mkdtemp(prefix='nb_', dir='out')
+    try:
+        kaggle('kernels', 'output', ref, '-p', tmp, '--file-pattern', r'.*\.csv$', '-q', '-o', timeout=90)
+        root = os.path.realpath(tmp)
+        dest = os.path.join('public', ref.replace('/', '_'))
+        os.makedirs(dest, exist_ok=True)
+        for dp, _, fs in os.walk(tmp):
+            for f in fs:
+                p = os.path.realpath(os.path.join(dp, f))
+                if f.endswith('.csv') and os.path.isfile(p) and not os.path.islink(os.path.join(dp, f)) \
+                        and os.path.commonpath([root, p]) == root:
+                    shutil.move(p, os.path.join(dest, os.path.basename(p)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+
+
+def check_puzzles():
+    """data/puzzles.csv must never change: compare with the hash recorded on first use."""
+    h = hashlib.sha256(open('data/puzzles.csv', 'rb').read()).hexdigest()
+    pin = 'out/puzzles.sha256'
+    if not os.path.exists(pin): open(pin, 'w').write(h)
+    if open(pin).read().strip() != h:
+        raise RuntimeError('data/puzzles.csv changed since it was pinned; refusing to merge')
+
+
 def run(say):
+    check_puzzles()
     seen = json.load(open(SEEN)) if os.path.exists(SEEN) and '--full' not in sys.argv else {}
     ks, changed = kernels(), 0
     for ref, stamp in ks.items():
         if seen.get(ref) == stamp and stamp: continue
-        d = os.path.join('public', ref.replace('/', '_'))
-        os.makedirs(d, exist_ok=True)
         try:
-            kaggle('kernels', 'output', ref, '-p', d, '--file-pattern', r'.*\.csv$', '-q', '-o', timeout=90)  # slow ones retry next run
+            fetch(ref)  # slow ones retry next run
             seen[ref] = stamp; changed += 1
         except subprocess.TimeoutExpired:
             say(f'timeout {ref}')
+        except ValueError as e:
+            say(f'skipped: {e}')
     json.dump(seen, open(SEEN, 'w'))
+    check_puzzles()
     from score import score
     best_score = score(BEST, 'data/puzzles.csv') if os.path.exists(BEST) else None
     last = last_submitted()
