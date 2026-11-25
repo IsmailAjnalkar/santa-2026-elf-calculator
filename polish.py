@@ -1,5 +1,5 @@
 """Shorten valid programs by deleting an instruction and re-routing its consumers.
-usage: python polish.py in.csv out.csv [puzzles.csv]
+usage: python polish.py in.csv out.csv [puzzles.csv] [workers]   (workers default 12; polish_pilot.py used 2)
 For instruction k: delete it; every later instruction that read k's result is rewritten to make the same value
 in one op from whatever the registers hold at that moment. Accept if the whole program still passes score.check."""
 import csv, json, sys
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     P = load_puzzles(sys.argv[3] if len(sys.argv) > 3 else 'data/puzzles.csv')
     rows = [(r['id'], json.loads(r['program'])) for r in csv.DictReader(open(sys.argv[1], newline='', encoding='utf-8'))]
     before = sum(len(p) for _, p in rows)
-    with Pool(12) as pool:
+    with Pool(int(sys.argv[4]) if len(sys.argv) > 4 else 12) as pool:
         res = dict(pool.imap_unordered(polish, [(pid, p, P[pid]) for pid, p in rows], chunksize=4))
     after = sum(len(p) for p in res.values())
     with open(sys.argv[2], 'w', newline='', encoding='utf-8') as f:
