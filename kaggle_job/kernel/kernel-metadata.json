@@ -1,0 +1,4 @@
+{"id": "ajnalkarismailsab/santa2026-lns-1-500", "title": "santa2026-lns-1-500", "code_file": "run.py", "language": "python",
+ "kernel_type": "script", "is_private": true, "enable_gpu": false, "enable_internet": false,
+ "dataset_sources": ["ajnalkarismailsab/santa2026-ajnal-best", "goodpjw2008/santa-2026-dag-lns-programs"],
+ "competition_sources": ["santa-2026"], "kernel_sources": []}
