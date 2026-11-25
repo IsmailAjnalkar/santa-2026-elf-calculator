@@ -6,7 +6,9 @@ from score import load_puzzles, check, score
 csv.field_size_limit(1 << 26)
 out, P = sys.argv[1], load_puzzles(sys.argv[2])
 best, src = {}, {}
-for path in sys.argv[3:]:
+# "@list.txt" expands to the paths listed in that file (Windows caps a command line at ~32k chars)
+inputs = [p for a in sys.argv[3:] for p in (open(a[1:], encoding='utf-8').read().split('\n') if a.startswith('@') else [a]) if p]
+for path in inputs:
     ok = total = bad = 0
     try:
         rows = list(csv.DictReader(open(path, newline='', encoding='utf-8-sig')))

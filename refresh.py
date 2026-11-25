@@ -6,7 +6,7 @@ import csv, datetime, hashlib, io, json, os, re, shutil, subprocess, sys, tempfi
 
 COMP, BEST = 'santa-2026', 'out/best.csv'
 LAST, SEEN, LOCK = 'out/last_submitted.txt', 'out/kernel_seen.json', 'out/refresh.lock'
-DAILY_CAP = 90          # leave 10 of Kaggle's 100 daily submissions for manual use
+DAILY_CAP = 50          # user: at most 50 submissions per day
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -138,8 +138,9 @@ def run(say):
     last = last_submitted()
     if changed or best_score is None:
         files = [os.path.join(dp, f) for dp, _, fs in os.walk('public') for f in fs if f.endswith('.csv')]
+        open('out/merge_files.txt', 'w', encoding='utf-8').write('\n'.join(files))
         r = subprocess.run([sys.executable, 'merge.py', 'out/candidate.csv', 'data/puzzles.csv',
-                            *([BEST] if best_score else []), *files], capture_output=True, text=True)
+                            *([BEST] if best_score else []), '@out/merge_files.txt'], capture_output=True, text=True)
         lines = r.stdout.strip().splitlines()
         if r.returncode or not lines:
             say(f'merge failed: {r.stderr[-500:]}'); return
