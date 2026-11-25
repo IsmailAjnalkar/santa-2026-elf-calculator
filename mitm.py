@@ -105,13 +105,13 @@ def find_affine(t, A, B, C, limit):
 
 
 class Levels:
-    def __init__(self, V, limit, cap3=3_000_000):
+    def __init__(self, V, limit, cap3=3_000_000, depth=3):
         self.limit = limit
         base = np.array(sorted(V), np.int64)
         self.L = [base]
         self.prov = [None]
         seen = base
-        for k in (1, 2, 3):
+        for k in range(1, depth + 1):
             par = self.L[-1]
             if k == 3 and _count(par, base, limit) > cap3:
                 break
@@ -138,7 +138,7 @@ class Levels:
             i = int(self.prov[k][0][i]); k -= 1
         return plan[::-1]
 
-    def best(self, t, max_cost):
+    def best(self, t, max_cost, affine_a_max=1):
         """(cost, plan) for the cheapest pattern up to max_cost, or None."""
         lk = self.level_of(t)
         if lk is not None and lk <= max_cost:
@@ -148,7 +148,7 @@ class Levels:
         combos = [(i + j + 1, 'pair', i, j, 0) for i in range(n + 1) for j in range(i, n + 1)
                   if not (i == 0 and j <= n - 1)]  # L0 ⊕ Lj is level j+1, already checked
         # a from levels 0-1, b from 0-2: an L2 x L2 scan is ~1e10 steps when c can be large
-        combos += [(i + j + k + 2, 'affine', i, j, k) for i in range(min(n, 1) + 1) for j in range(i, min(n, 2) + 1)
+        combos += [(i + j + k + 2, "affine", i, j, k) for i in range(min(n, affine_a_max) + 1) for j in range(i, min(n, 2) + 1)
                    for k in range(n + 1) if i + j > 0]
         combos.sort(key=lambda c: (c[0], c[1] == 'affine'))
         for c, kind, i, j, k in combos:
