@@ -10,9 +10,14 @@ DAILY_CAP = 50          # user: at most 50 submissions per day
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 
+# This network's IPv6 route to Kaggle/Google hosts stalls; force IPv4 and a socket timeout for every CLI call.
+IPV4 = ('import socket, sys, urllib3.util.connection as uc; uc.allowed_gai_family = lambda: socket.AF_INET; '
+        'socket.setdefaulttimeout(120); sys.argv = ["kaggle"] + sys.argv[1:]; from kaggle.cli import main; main()')
+
+
 def kaggle(*args, timeout=300):
     env = dict(os.environ, PYTHONIOENCODING='utf-8')  # emoji in notebook titles crash the default Windows codec
-    r = subprocess.run([sys.executable, '-m', 'kaggle', *args], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, '-c', IPV4, *args], capture_output=True, text=True,
                        encoding='utf-8', errors='replace', timeout=timeout, env=env)
     return r.stdout + (('\n[stderr] ' + r.stderr.strip()) if r.stderr.strip() else '')
 
