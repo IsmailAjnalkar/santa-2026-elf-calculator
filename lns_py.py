@@ -8,6 +8,8 @@ from multiprocessing import Pool
 from score import load_puzzles, check, NREG
 
 csv.field_size_limit(1 << 26)
+DEPTH, POOL = 1, 48  # search depth and pool cap for depth > 1 (--depth, --pool)
+EQ = 0.3  # probability of accepting an equal-length rebuild (plateau move); --eq overrides
 OPS = {'+': lambda x, y: x + y, '-': lambda x, y: x - y, '*': lambda x, y: x * y, '/': lambda x, y: x // y}
 
 
@@ -90,12 +92,16 @@ def emit(nodes, start, targets, limit):
 
 
 def improve_puzzle(args):
-    pid, prog, (start, targets, limit), secs, seed = args
+    """Plateau walk (simulated annealing at zero temperature + restarts): accept strictly shorter rebuilds, and
+    equal-length rebuilds that change the program with probability EQ; restart from the best after 50 idle moves."""
+    pid, prog, (start, targets, limit), secs, seed, cfg = args
+    global DEPTH, POOL, EQ
+    DEPTH, POOL, EQ = cfg
     from mitm import Levels
     rng = random.Random(seed); t_end = time.time() + secs
-    best = prog; tried = 0
+    best = cur = prog; tried = 0; idle = 0
     while time.time() < t_end:
-        node = to_dag(best, start)
+        node = to_dag(cur, start)
         need = [t for t in dict.fromkeys(targets) if t not in set(start)]
         memo = {}
         anc = {t: ancestors(t, node, memo) | {t} for t in need}
@@ -113,8 +119,16 @@ def improve_puzzle(args):
             tried += 1
             desc = {v for v in live if t in anc.get(v, ()) or (v in node and t in ancestors(v, node, memo))}
             pool = [v for v in set(start) | (live - cone) if v not in desc]
-            lv = Levels({v: 0 for v in pool}, limit, depth=1)
-            r = lv.best(t, len(cone) - 1, affine_a_max=0)   # a from pool values only: L1 x L1 scans explode
+            if DEPTH > 1 and len(pool) > POOL:       # deeper search on a focused pool: cone inputs, starts, most reused
+                inputs = {u for v in cone for u in node[v][1:3] if u not in cone}
+                uses = {}
+                for v in live:
+                    for u in node[v][1:3]: uses[u] = uses.get(u, 0) + 1
+                rest = sorted((v for v in pool if v not in inputs), key=lambda v: -uses.get(v, 0))
+                pool = list(dict.fromkeys([*inputs, *start, *rest]))[:POOL]
+            lv = Levels({v: 0 for v in pool}, limit, depth=DEPTH)
+            # equal cost allowed when plateau moves are on; a from pool values only (L1 x L1 scans explode)
+            r = lv.best(t, len(cone) - (0 if EQ > 0 else 1), affine_a_max=0)
             if not r: continue
             plan = r[1]
             have = set(pool); steps = {}
@@ -130,9 +144,13 @@ def improve_puzzle(args):
             for n, (v, (op, a, b)) in enumerate(steps.items()):
                 nodes[v] = (op, a, b, pos - 1 + (n + 1) / (len(steps) + 1))
             new = emit(nodes, start, targets, limit)
-            if new and len(new) < len(best) and check(new, start, targets, limit) is None:
-                best = new; improved = True; break
-        if not improved: break
+            if not new or new == cur or check(new, start, targets, limit) is not None: continue
+            if len(new) < len(cur) or (len(new) == len(cur) and rng.random() < EQ):
+                cur = new; improved = True; break
+        if len(cur) < len(best): best, idle = cur, 0
+        else: idle += 1
+        if not improved: break                     # no shorter or equal move exists from here
+        if idle > 50: cur, idle = best, 0          # randomized restart from the best
     return pid, best, tried
 
 
@@ -146,9 +164,11 @@ if __name__ == '__main__':
     ids.sort(key=lambda k: -(len(rows[k]) - len(P[k][1])))        # most slack first
     if '--sample' in args: ids = ids[:int(opt('--sample', '40'))]
     secs, t0 = float(opt('--secs', '60')), time.time()
+    EQ = float(opt('--eq', str(EQ)))
+    DEPTH, POOL = int(opt('--depth', '1')), int(opt('--pool', '48'))
     before = sum(len(rows[k]) for k in ids)
     with Pool(int(opt('--workers', '12'))) as pool:
-        res = list(pool.imap_unordered(improve_puzzle, [(k, rows[k], P[k], secs, i) for i, k in enumerate(ids)]))
+        res = list(pool.imap_unordered(improve_puzzle, [(k, rows[k], P[k], secs, i, (DEPTH, POOL, EQ)) for i, k in enumerate(ids)]))
     out = dict(rows); improved = []
     for pid, prog, _ in res:
         if len(prog) < len(rows[pid]) and check(prog, *P[pid]) is None:
