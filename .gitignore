@@ -11,3 +11,4 @@ out/
 __pycache__/
 kaggle_job/dataset/
 kaggle_job/result_*/
+public_ds/

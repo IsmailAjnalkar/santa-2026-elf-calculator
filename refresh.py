@@ -2,7 +2,7 @@
 usage: python refresh.py [--no-submit] [--full]     (run from the santa-2026 folder; safe to run every few minutes)
 Only notebooks re-run since the last pass are downloaded (--full re-downloads all). A lock file stops overlapping runs.
 Downloaded files are data only: merge.py re-validates every program with score.check."""
-import csv, datetime, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile, time
+import csv, datetime, hashlib, io, json, os, re, shutil, subprocess, sys, tempfile, time, zipfile
 
 COMP, BEST = 'santa-2026', 'out/best.csv'
 LAST, SEEN, LOCK = 'out/last_submitted.txt', 'out/kernel_seen.json', 'out/refresh.lock'
@@ -112,6 +112,44 @@ def fetch(ref):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def datasets():
+    """{ref: lastUpdated} for recently updated public datasets matching 'santa 2026'."""
+    out = {}
+    for page in (1, 2):
+        txt = kaggle('datasets', 'list', '-s', 'santa 2026', '--sort-by', 'updated', '-p', str(page), '-v')
+        for r in csv.DictReader(io.StringIO(txt.split('\n[stderr]')[0])):
+            if r.get('ref') and REF_OK.match(r['ref']): out[r['ref']] = r.get('lastUpdated', '')
+    return out
+
+
+def fetch_dataset(ref, max_bytes=50 << 20):
+    """Download a dataset's .csv files (each <= max_bytes) one by one into a fresh temp dir; extract zips only after
+    checking member names; move plain .csv files that resolve inside the temp dir into public_ds/<owner>_<slug>/."""
+    if not REF_OK.match(ref) or '..' in ref:
+        raise ValueError(f'unexpected dataset ref {ref!r}')
+    listing = kaggle('datasets', 'files', ref, '-v', '--page-size', '200').split('\n[stderr]')[0]
+    names = [r['name'] for r in csv.DictReader(io.StringIO(listing))
+             if r.get('name', '').endswith('.csv') and int(r.get('totalBytes') or r.get('size') or 0) <= max_bytes]
+    dest = os.path.join('public_ds', ref.replace('/', '_'))
+    os.makedirs(dest, exist_ok=True)
+    for name in names:
+        tmp = tempfile.mkdtemp(prefix='santa_ds_')
+        try:
+            kaggle('datasets', 'download', ref, '-f', name, '-p', tmp, '-q', '-o', timeout=120)
+            root = os.path.realpath(tmp)
+            for z in [os.path.join(tmp, f) for f in os.listdir(tmp) if f.endswith('.zip')]:
+                with zipfile.ZipFile(z) as zf:
+                    for m in zf.namelist():
+                        if m.endswith('.csv') and '..' not in m and not os.path.isabs(m) and ':' not in m:
+                            zf.extract(m, tmp)
+            for dp, _, fs in os.walk(tmp):
+                for f in fs:
+                    p = os.path.realpath(os.path.join(dp, f))
+                    if f.endswith('.csv') and os.path.isfile(p) and os.path.commonpath([root, p]) == root:
+                        safe = re.sub(r'[^A-Za-z0-9_.-]', '_', name.replace('/', '__'))
+                        shutil.move(p, os.path.join(dest, safe))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def check_puzzles():
@@ -136,13 +174,23 @@ def run(say):
             say(f'timeout {ref}')
         except ValueError as e:
             say(f'skipped: {e}')
+    for ref, stamp in datasets().items():   # public datasets also carry frontier programs
+        key = 'ds:' + ref
+        if seen.get(key) == stamp and stamp: continue
+        try:
+            fetch_dataset(ref)
+            seen[key] = stamp; changed += 1
+        except subprocess.TimeoutExpired:
+            say(f'timeout dataset {ref}')
+        except (ValueError, zipfile.BadZipFile) as e:
+            say(f'skipped dataset: {e}')
     json.dump(seen, open(SEEN, 'w'))
     check_puzzles()
     from score import score
     best_score = score(BEST, 'data/puzzles.csv') if os.path.exists(BEST) else None
     last = last_submitted()
     if changed or best_score is None:
-        files = [os.path.join(dp, f) for dp, _, fs in os.walk('public') for f in fs if f.endswith('.csv')]
+        files = [os.path.join(dp, f) for top in ('public', 'public_ds') for dp, _, fs in os.walk(top) for f in fs if f.endswith('.csv')]
         open('out/merge_files.txt', 'w', encoding='utf-8').write('\n'.join(files))
         r = subprocess.run([sys.executable, 'merge.py', 'out/candidate.csv', 'data/puzzles.csv',
                             *([BEST] if best_score else []), '@out/merge_files.txt'], capture_output=True, text=True)
